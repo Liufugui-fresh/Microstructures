@@ -1,0 +1,348 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from skimage import draw
+from scipy.ndimage.filters import gaussian_filter
+# from skimage.filters import threshold_otsu
+from scipy.ndimage.interpolation import rotate
+from tqdm import tqdm
+from scipy import misc
+import imageio
+import copy
+import random
+import argparse
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("file", help="path to file with image")
+parser.add_argument("size", help="size of sampled texture", type=int)
+#parser.add_argument("num", help="number of sampled textures", type=int)
+parser.add_argument("--to_enrich", help="to enrich tiles or not", type=bool, default=False)
+parser.add_argument("--n1", help='number of north edges', default=2)
+parser.add_argument("--n2", help='number of west edges', default=2)
+parser.add_argument("--l", help='length of tile + overlap - 1', default=200)
+parser.add_argument("--w", help='width of overlap', default=80)
+args = parser.parse_args()
+
+to_enrich = args.to_enrich
+img_path = args.file
+TEST_SIZE = args.size
+#num_to_create = args.num
+
+
+def create_colors_from_texture(texture, n, l, alpha=0):
+    '''
+    Create coloring patches for wang tiles
+    params:
+        texture: initial texture to sample from
+        n: number of colors
+        l: width/height of result
+        alpha: takes values 0 or 45
+    returns: list of colors
+    '''
+
+    colors = []
+    w = texture.shape[0]
+
+    for i in tqdm(range(n)):
+
+        rotated = rotate(texture, alpha, reshape=True)
+        if alpha != 0:
+            alpha = 45
+        alpha = alpha / 180 * np.pi
+        a = w / (np.cos(alpha) + np.sin(alpha))
+        l_1 = w * np.cos(alpha) - a * np.cos(alpha) ** 2
+        x = np.random.randint(l_1, rotated.shape[0] - l_1 - l)  # row
+        y = np.random.randint(l_1, rotated.shape[0] - l_1 - l)
+
+        img = rotated[x:x + l, y:y + l]
+        colors.append(img)
+
+    return colors
+
+
+def find_all_combinations(n1, n2, n_NW):
+    '''
+    Finds n_NW combinations of colors
+    params:
+        n1: number of north colors
+        n2: number of west colors
+        n_NW: number of north-western color combinations
+    returns: list of all color combinations
+    '''
+    comb = np.asarray([str(i) + str(j) for i in range(n1) for j in range(n1, n1 + n2)])
+    new_comb = []
+    used = []
+    for k in range(n_NW):
+        while True:
+            restart = False
+            to_choose = np.random.choice(comb, size=len(comb))  # random sample of SE edges
+            for u in used:
+                if sum(u == to_choose) != 0:
+                    to_choose = np.random.choice(comb, size=len(comb))
+                    restart = True
+                    break
+            if not restart:
+                break
+            used.append(to_choose)
+        new_comb = new_comb + [comb[i] + to_choose[i] for i in range(len(comb))]
+    return new_comb
+
+
+def merge_two_parts(arr1, arr2, omega):
+    '''
+    params:
+        arr1, arr2 - input arrays
+        omega - width of overlap
+        axis - axis along which arrays are merged, 0 - stack vertically, 1 - horisontally
+
+    returns: merged arrays with minimal difference on their border
+    '''
+
+    h, w = arr1.shape
+    prev = np.empty((arr1.shape[0], omega), dtype=list)
+    distances = np.full((arr1.shape[0], omega), fill_value=np.inf)
+
+    merged = np.concatenate([arr1, arr2[:, omega:]], axis=1)  # resulting image
+
+    distances[0] = ((arr1[0, -omega:] - arr2[0, :omega]) ** 2)
+
+    for i in range(1, arr1.shape[0]):  # rows
+        for j in range(omega):
+            # distance between array2 value in the current point and array1 value in previous row, same column
+            weight_cur = distances[i - 1, j]  # ((arr1[i-1,w-omega+j]-arr2[i-1,j])**2).sum()
+
+            if j < omega - 1 and j > 0:
+                # distance between array2 and array1 value in previous row, column-1
+                weight_prev = distances[i - 1, j - 1]
+                # distance between array2 and array1 value in previous row, column+1
+                weight_next = distances[i - 1, j + 1]
+
+                # comparison of differences:
+                if weight_cur <= weight_prev:
+                    if weight_cur <= weight_next:
+                        distances[i, j] = weight_cur + ((arr1[i, w - omega + j] - arr2[i, j]) ** 2)
+                        prev[i, j] = (i - 1, j)
+                    else:
+                        distances[i, j] = weight_next + ((arr1[i, w - omega + j] - arr2[i, j]) ** 2)
+                        prev[i, j] = (i - 1, j + 1)
+                else:
+                    if weight_prev <= weight_next:
+                        distances[i, j] = weight_prev + ((arr1[i, w - omega + j] - arr2[i, j]) ** 2)
+                        prev[i, j] = (i - 1, j - 1)
+                    else:
+                        distances[i, j] = weight_next + ((arr1[i, w - omega + j] - arr2[i, j]) ** 2)
+                        prev[i, j] = (i - 1, j + 1)
+
+            elif j == 0:  # left border
+                weight_next = distances[i - 1, j + 1]
+                if weight_cur <= weight_next:
+                    distances[i, j] = weight_cur + ((arr1[i, w - omega + j] - arr2[i, j]) ** 2)
+                    prev[i, j] = (i - 1, j)
+                else:
+                    distances[i, j] = weight_next + ((arr1[i, w - omega + j] - arr2[i, j]) ** 2)
+                    prev[i, j] = (i - 1, j + 1)
+
+            else:  # right border
+                weight_prev = distances[i - 1, j - 1]
+                if weight_cur <= weight_prev:
+                    distances[i, j] = weight_cur + ((arr1[i, w - omega + j] - arr2[i, j]) ** 2).sum()
+                    prev[i, j] = (i - 1, j)
+                else:
+                    distances[i, j] = weight_prev + ((arr1[i, w - omega + j] - arr2[i, j]) ** 2).sum()
+                    prev[i, j] = (i - 1, j - 1)
+
+    j = np.argmin(distances[h - 1])
+
+    for i in range(h):  # go up
+        merged[h - 1 - i, w - omega + j:w] = arr2[h - 1 - i, j:omega]
+        if i != h - 1:
+            i_prev, j_prev = prev[h - 1 - i, j]
+            j = j_prev
+
+    return merged[:, :w], merged[:, w - omega:]
+
+
+def create_tilings(colors_comb, colors, n1, n2, n_total, a, l, omega):
+    n_rep = int(n_total / n1 ** 2 / n2 ** 2)
+    h, w = colors[0].shape
+
+    tilings = {}
+    center = l - 1 - omega // 2  # l - size of image crop, a - resulting size of tile
+    for i in range(n_total):
+        c = []
+        for num in colors_comb[i]:
+            # print(num)
+            c.append(colors[int(num)][:])
+        final = np.zeros((a, a))
+
+        for k in range(4):
+
+            c[k] = np.rot90(c[k], k=k)
+            c[(k + 1) % 4] = np.rot90(c[(k + 1) % 4], k=k)
+
+            c[k], c[(k + 1) % 4] = merge_two_parts(c[k], c[(k + 1) % 4], omega)
+            merged = np.hstack([c[k][:, :w - omega], c[(k + 1) % 4]])
+
+            for j in range(omega // 2, l):
+                if k == 0:
+                    tile_ind = j - omega // 2
+                    if tile_ind < a:
+                        ind1 = tile_ind
+                        indices2 = np.arange(a - tile_ind - 1, a)
+                        indices1 = np.arange(ind1 + 1)
+                    else:
+                        ind1 = 2 * a - 1 - tile_ind - 1
+                        indices2 = np.arange(ind1 + 1)
+                        indices1 = np.arange(tile_ind - a + 1, a)
+                    final[indices1, indices2] = merged[j, np.arange(center - ind1, center + ind1 + 1, 2)]
+                elif k == 1:
+                    tile_ind = j - omega // 2
+                    if tile_ind < a:
+                        ind1 = tile_ind
+                        indices1 = np.arange(a - tile_ind - 1, a)
+                        indices2 = np.arange(a - 1, a - tile_ind - 1 - 1, -1)
+                    else:
+                        ind1 = 2 * a - 1 - tile_ind
+                        indices1 = np.arange(ind1 + 1)
+                        indices2 = np.arange(2 * a - 1 - tile_ind, -1, -1)
+
+                    final[indices1, indices2] = merged[j, np.arange(center - ind1, center + ind1 + 1, 2)]
+                elif k == 2:
+                    tile_ind = j - omega // 2
+                    if tile_ind < a:
+                        ind1 = tile_ind
+                        indices1 = np.arange(a - 1, a - 1 - tile_ind - 1, -1)
+                        indices2 = np.arange(tile_ind, -1, -1)
+                    else:
+                        ind1 = 2 * a - 1 - tile_ind
+                        indices1 = np.arange(ind1, -1, -1)
+                        indices2 = np.arange(a - 1, (a - ind1 - 2), -1)
+
+                    final[indices1, indices2] = merged[j, np.arange(center - ind1, center + ind1 + 1, 2)]
+                elif k == 3:
+                    tile_ind = j - omega // 2
+                    if tile_ind < a:
+                        ind1 = tile_ind
+                        indices1 = np.arange(tile_ind, -1, -1)
+                        indices2 = np.arange(tile_ind + 1)
+                    else:
+                        ind1 = 2 * a - 1 - tile_ind
+                        indices1 = np.arange(a - 1, tile_ind - a - 1, -1)
+                        indices2 = np.arange(tile_ind - a, a)
+                    final[indices1, indices2] = merged[j, np.arange(center - ind1, center + ind1 + 1, 2)]
+
+            if i == 0:
+                tmp = c[2][:]
+
+            c[k] = np.rot90(c[k], k=k, axes=(1, 0))
+            c[(k + 1) % 4] = np.rot90(c[(k + 1) % 4], k=k, axes=(1, 0))
+
+        tilings.update({colors_comb[i]: final})
+    return tilings
+
+
+def enrich_tiles(tiles, enrichments, width):
+    enriched_tiles = copy.deepcopy(tiles)
+    center_tile = tiles[list(tiles.keys())[0]].shape[0] // 2
+    center_enrichment = enrichments[0].shape[0] // 2
+    delta = center_tile - center_enrichment
+    #print(delta)
+    i = 0
+    for ind, tile in tiles.items():
+        ar1, ar2 = merge_two_parts(np.rot90(tile[:width + delta, delta:-delta]),
+                                   np.rot90(enrichments[i][:width]), width)
+
+        enrichments[i][:width] = np.rot90(ar2, axes=(1, 0))
+
+        ar1, ar2 = merge_two_parts(enrichments[i][:, -width:], tile[delta:-delta, -(width + delta):], width)
+        enrichments[i][:, -width:] = ar1
+
+        ar1, ar2 = merge_two_parts(np.rot90(enrichments[i][-width:]),
+                                   np.rot90(tile[-(width + delta):, delta:-delta]), width)
+        enrichments[i][-width:] = np.rot90(ar1, axes=(1, 0))
+
+        ar1, ar2 = merge_two_parts(tile[delta:-delta, :(width + delta)], enrichments[i][:, :width], width)
+        enrichments[i][:, :width] = ar2
+        enriched_tiles[ind][delta:-delta, delta:-delta] = enrichments[i]
+        i += 1
+    return enriched_tiles
+
+
+def create_tiles(image, n_1, n_2, n_NW, l, w, patch_border, width_enrich, enrich=False):
+    n_cs = n_1 * n_2
+    n_total = int(n_NW * n_cs)
+    res_size = l - w - 1
+
+    colors = create_colors_from_texture(image, n_1 + n_2, l, 45)
+    patch_size = res_size - patch_border
+    comb = find_all_combinations(n_1, n_2, n_NW)
+    tiles = create_tilings(comb[:n_total], colors, n_1, n_2, n_total, res_size, l, w)
+
+    if enrich:
+        enrichments = create_colors_from_texture(image, n_total, patch_size, 0)
+        enriched_tiles = enrich_tiles(tiles, enrichments, width_enrich)
+        # tiles_1 = copy.deepcopy(tiles)
+        tiles = enriched_tiles
+
+    return tiles, comb, res_size
+
+
+def create_tiled_img(a, tiles, comb, desired_size):
+
+    height = desired_size // a + 1
+    width = desired_size // a + 1
+
+    whole_img = np.zeros((height * a, width * a))
+
+    prev_border = random.sample(tiles.keys(), 1)[0]
+    prev_tile = tiles[prev_border]
+    whole_img[:a, :a] = prev_tile
+
+    prev_line = ['' for i in range(width)]
+    prev_line[0] = prev_border
+
+    for i in range(height):
+        for j in range(width):
+            if i + j == 0:
+                continue
+
+            if i == 0:
+                result = {key: value for key, value in tiles.items() if key[3] == prev_border[1]}
+            elif j == 0:
+                result = {key: value for key, value in tiles.items() if key[0] == prev_line[j][2]}
+            else:
+                result = {key: value for key, value in tiles.items()
+                          if key[3] == prev_border[1] and key[0] == prev_line[j][2]}
+
+            prev_border = random.sample(result.keys(), 1)[0]
+
+            prev_tile = result[prev_border]
+            prev_line[j] = prev_border
+            whole_img[i * a:(i + 1) * a, j * a:(j + 1) * a] = prev_tile
+    return whole_img
+
+
+if __name__ == '__main__':
+    img = imageio.imread(img_path)
+    w = img.shape[0]
+    img = img[:, :w, 0].astype(float) / 255.
+
+    #n_1 = 2
+    #n_2 = 2
+    #n_NW = n_1 * n_2
+
+
+    n_1 =args.n1
+    n_2 =args.n2
+
+    n_NW = n_1 * n_2
+
+    l = args.l
+    w = args.w
+    patch_border = 6
+
+
+    tiles, combinations, a = create_tiles(img, n_1, n_2, n_NW, l, w, patch_border=80, width_enrich=30, enrich=to_enrich)
+
+    tiled = create_tiled_img(a, tiles, combinations, TEST_SIZE)
+    imageio.imwrite('wang_res/'+img_path, tiled)
