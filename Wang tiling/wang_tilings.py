@@ -30,7 +30,7 @@ img_path = args.file
 TEST_SIZE = args.size
 num_to_create = args.num
 
-
+SIZE = 0
 def create_colors_from_texture(texture, n, l, alpha=0):  # only 2 values for alpha 0 or 45
     colors = []
     w = texture.shape[0]
@@ -183,7 +183,7 @@ def merge_two_parts(arr1, arr2, omega, axis=1): # omega is width of overlap
 def create_tilings(colors_comb, colors, n1, n2, n_total, a, l, omega):
     n_rep = int(n_total/n1**2/n2**2)
     h,w = colors[0].shape
-
+    size = l-omega//2
     tilings = {}
     center = l-1-omega//2 # l - size of image crop, a - resulting size of tile
     for i in range(n_total):
@@ -191,17 +191,39 @@ def create_tilings(colors_comb, colors, n1, n2, n_total, a, l, omega):
         for num in colors_comb[i]:
             #print(num)
             c.append(colors[int(num)][:])
-        final = np.zeros((a, a))
+        final = np.zeros((2*size, 2*size))
         
-        
+       
         for k in range(4):
-            
-            c[k] = np.rot90(c[k], k=k)
-            c[(k+1)%4] = np.rot90(c[(k+1)%4], k=k)
+           
+            if k == 0:
+                c[k], c[(k+1)%4] = merge_two_parts(c[k], c[(k+1)%4], omega)
+                merged = np.hstack([c[k][:,:w-omega], c[(k+1)%4]])
+                final[:l] = merged
 
-            c[k], c[(k+1)%4] = merge_two_parts(c[k], c[(k+1)%4], omega)
-            merged = np.hstack([c[k][:,:w-omega], c[(k+1)%4]])
-            
+            elif k == 1:
+                c[1] = np.rot90(c[1], k=1)
+                c[2] = np.rot90(c[2], k=1)
+                c[1], c[2] = merge_two_parts(c[1], c[2], omega)
+                merged = np.hstack([c[1][:,:-omega], c[2]])
+                final[:,-l:] = np.rot90(merged, k=1, axes=(1, 0))
+                c[1] = np.rot90(c[1], k=1, axes=(1, 0))
+                c[2] = np.rot90(c[2], k=1, axes=(1, 0))
+            elif k == 2:                
+                c[3], c[2] = merge_two_parts(c[3], c[2], omega)
+                merged = np.hstack([c[3], c[2][:,omega:]])
+                final[-l:] = merged
+            elif k == 3:
+                c[0] = np.rot90(c[0], k=1)
+                c[3] = np.rot90(c[3], k=1)
+                c[0], c[3] = merge_two_parts(c[0], c[3], omega)
+                merged = np.hstack([c[0][:,:-omega], c[3]])
+                final[:,:l] = np.rot90(merged, k=1, axes=(1,0))
+                c[0] = np.rot90(c[0], k=1, axes=(1, 0))
+                c[3] = np.rot90(c[3], k=1, axes=(1, 0))
+                
+
+            '''
             for j in range(omega//2, l):
                 if k == 0:
                     tile_ind = j-omega//2
@@ -252,14 +274,27 @@ def create_tilings(colors_comb, colors, n1, n2, n_total, a, l, omega):
             
             if i == 0:
                 tmp = c[2][:]
-            
-            c[k] = np.rot90(c[k], k=k, axes=(1, 0))
-            c[(k+1)%4] = np.rot90(c[(k+1)%4], k=k, axes=(1, 0))
-            
-        tilings.update({colors_comb[i]: final})
+            '''
+            #final = np.rot90(final, k = k, axes=(1, 0))
+
+            plt.imsave('final_{0}_{1}.png'.format(k,colors_comb[i]), final, cmap='gray')
+        #print(final.shape)
+        final = rotate(final[omega//2:-omega//2, omega//2:-omega//2], -45, resize=True)
+        #print(final.shape)
+        #print(size)
+        a = final.shape[0]//2
+        print(a)
+        center = final.shape[0] - a
+      
+        plt.imsave('final_{}.png'.format(colors_comb[i]), final[a//2:-a//2, a//2:-a//2], cmap='gray')
+        #print(final[a//2:-a//2, a//2:-a//2].shape)
+        #print(size)
+        #print(colors_comb[i])
+        
+        tilings.update({colors_comb[i]: final[a//2:-a//2, a//2:-a//2]})
         #print(colors_comb[i])
     #print(tilings.keys())
-    return tilings
+    return a, tilings
 
 
 def enrich_tiles(tiles, enrichments, width):
@@ -297,7 +332,7 @@ def create_tiles(image, n_1, n_2, n_NW, l, w, patch_border, width_enrich, enrich
     colors = create_colors_from_texture(image, n_1 + n_2, l, 45)
     patch_size = res_size - patch_border
     comb = find_all_combinations(n_1, n_2, n_NW)
-    tiles = create_tilings(comb[:n_total], colors, n_1, n_2, n_total, res_size, l, w)
+    res_size, tiles = create_tilings(comb[:n_total], colors, n_1, n_2, n_total, res_size, l, w)
 
     if enrich:
         enrichments = create_colors_from_texture(image, n_total, patch_size, 0)
@@ -311,36 +346,41 @@ def create_tiles(image, n_1, n_2, n_NW, l, w, patch_border, width_enrich, enrich
 def create_tiled_img_from_source(image, n_1,n_2, n_NW, l, w, patch_border, width_enrich, size, enrich=False):
     n_cs = n_1*n_2
     n_total = int(n_NW*n_cs)
-    a = l-w-1
+    a = SIZE
     
     colors = create_colors_from_texture(image, n_1+n_2, l, 45)
-    patch_size = a - patch_border
-    if enrich:
-        enrichments = create_colors_from_texture(image, n_total, patch_size, 0)
     comb = find_all_combinations(n_1, n_2, n_NW)
     #print(comb)
     #print(n_total)
-    tiles = create_tilings(comb[:n_total], colors, n_1, n_2, n_total, a, l, w)
-    
+    a, tiles = create_tilings(comb[:n_total], colors, n_1, n_2, n_total, a, l, w)
+    #print(SIZE)
+    #a = SIZE
     height = size//a+1
     width = size//a+1
 
-    whole_img = np.zeros((height*a, width*a))
+    
+    patch_size = a - patch_border
     
     if enrich:
         #print(tiles[comb[0]].shape)
         #print(enrichments[0].shape)
+        enrichments = create_colors_from_texture(image, n_total, patch_size, 0)
         enriched_tiles = enrich_tiles(tiles, enrichments, width_enrich)
         tiles_1 = copy.deepcopy(tiles)
         tiles = enriched_tiles
     
     prev_border = random.sample(tiles.keys(), 1)[0]
     prev_tile = tiles[prev_border]
+    #print(prev_tile.shape)
+    a = prev_tile.shape[0]
+    whole_img = np.zeros((height*a, width*a))
+
+
     whole_img[:a,:a] = prev_tile
     #print(whole_img.shape)
     prev_line = ['' for i in range(width)]
     prev_line[0] = prev_border
-
+    #print(prev_border)
     for i in range(height):
         for j in range(width):
             if i+j == 0:
@@ -358,9 +398,9 @@ def create_tiled_img_from_source(image, n_1,n_2, n_NW, l, w, patch_border, width
                 #print(prev_line[j])
                 result = {key: value for key, value in tiles.items() \
                           if key[3] == prev_border[1] and key[0] == prev_line[j][2]}
-
+            
             prev_border = random.sample(result.keys(), 1)[0]
-
+            #print(prev_border)
             prev_tile = result[prev_border]
             prev_line[j] = prev_border
             whole_img[i*a:(i+1)*a, j*a:(j+1)*a] = prev_tile
@@ -397,7 +437,7 @@ if __name__ == '__main__':
         tiled = create_tiled_img_from_source(img, n_1, n_2, n_NW, l, w, 80, 30, TEST_SIZE, enrich=False)
         #print(tiled.min())
         #print(tiled.max())
-        plt.imsave('wang_alporas/alporas_'+str(i+1)+'.jpg', tiled, cmap='gray')
+        plt.imsave('berea_'+str(i+1)+'.jpg', tiled, cmap='gray')
         Image.open('wang_alporas/alporas_'+str(i+1)+'.jpg').convert('RGB').save('wang_alporas/alporas_'+str(i+1)+'.jpg')
         #print(tiled.max())
         #print(tiled.min())
