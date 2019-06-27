@@ -277,7 +277,7 @@ def create_tilings(colors_comb, colors, n1, n2, n_total, a, l, omega):
             '''
             #final = np.rot90(final, k = k, axes=(1, 0))
 
-            plt.imsave('final_{0}_{1}.png'.format(k,colors_comb[i]), final, cmap='gray')
+            #plt.imsave('final_{0}_{1}.png'.format(k,colors_comb[i]), final, cmap='gray')
         #print(final.shape)
         final = rotate(final[omega//2:-omega//2, omega//2:-omega//2], -45, resize=True)
         #print(final.shape)
@@ -286,7 +286,7 @@ def create_tilings(colors_comb, colors, n1, n2, n_total, a, l, omega):
         #print(a)
         center = final.shape[0] - a
       
-        plt.imsave('final_{}.png'.format(colors_comb[i]), final[a//2:-a//2, a//2:-a//2], cmap='gray')
+        #plt.imsave('final_{}.png'.format(colors_comb[i]), final[a//2:-a//2, a//2:-a//2], cmap='gray')
         #print(final[a//2:-a//2, a//2:-a//2].shape)
         #print(size)
         #print(colors_comb[i])
