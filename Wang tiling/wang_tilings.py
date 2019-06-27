@@ -283,7 +283,7 @@ def create_tilings(colors_comb, colors, n1, n2, n_total, a, l, omega):
         #print(final.shape)
         #print(size)
         a = final.shape[0]//2
-        print(a)
+        #print(a)
         center = final.shape[0] - a
       
         plt.imsave('final_{}.png'.format(colors_comb[i]), final[a//2:-a//2, a//2:-a//2], cmap='gray')
@@ -410,12 +410,13 @@ def create_tiled_img_from_source(image, n_1,n_2, n_NW, l, w, patch_border, width
 if __name__ == '__main__':
     img = imageio.imread(img_path)
     w = img.shape[0]
+    img_name, img_ext = img_path.split('/')[-1].split('.')
     #print(img.max())
     if len(img.shape) != 2:
         img = img[:, :w, 0].astype(float) / 255.
     else:
         img = img[:, :w].astype(float) / 255.
-    print(img.max())
+    #print(img.max())
     #n_1 = 2
     #n_2 = 2
     #n_NW = n_1 * n_2
@@ -437,8 +438,9 @@ if __name__ == '__main__':
         tiled = create_tiled_img_from_source(img, n_1, n_2, n_NW, l, w, 80, 30, TEST_SIZE, enrich=False)
         #print(tiled.min())
         #print(tiled.max())
-        plt.imsave('berea_'+str(i+1)+'.jpg', tiled, cmap='gray')
-        Image.open('wang_alporas/alporas_'+str(i+1)+'.jpg').convert('RGB').save('wang_alporas/alporas_'+str(i+1)+'.jpg')
+        filename = img_name+str(i+1)+'.'+img_ext
+        plt.imsave(filename, tiled, cmap='gray')
+        Image.open(filename).convert('RGB').save(filename)
         #print(tiled.max())
         #print(tiled.min())
         #Image.fromarray((tiled*255).astype(np.uint8)).save('wang_res/'+file_name+'_'+str(i+1)+'.'+ext)
